@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">HPC</string>
+    <string name="pwa_target_url">https://192.168.10.124:3000</string>
+</resources>
