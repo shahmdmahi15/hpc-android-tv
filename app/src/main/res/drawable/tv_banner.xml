@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <path
+        android:fillColor="#000000"
+        android:pathData="M0,0h320v180h-320z"/>
+    <!-- Medical Cross Logo -->
+    <path
+        android:fillColor="#2196F3"
+        android:pathData="M145,50h30v80h-30z"/>
+    <path
+        android:fillColor="#2196F3"
+        android:pathData="M120,75h80v30h-80z"/>
+</vector>

@@ -27,35 +27,43 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.tv.material3.Button
-import androidx.tv.material3.ExperimentalTvMaterial3Api
-import androidx.tv.material3.MaterialTheme
-import androidx.tv.material3.Text
 import com.shahmdmahi.hpc.R
+import com.shahmdmahi.hpc.util.HPCDownloadHelper
+import com.shahmdmahi.hpc.util.HPCPrintHelper
+import com.shahmdmahi.hpc.util.HPCTextToSpeechHelper
 import com.shahmdmahi.hpc.util.SslUtils
+import kotlinx.coroutines.delay
 
 private const val TAG = "HPC_TvWebView"
 
-@OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun TvWebView(
     targetUrl: String = stringResource(id = R.string.pwa_target_url),
@@ -69,8 +77,11 @@ fun TvWebView(
     var customView by remember { mutableStateOf<View?>(null) }
     var customViewCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
 
-    val webView = remember {
-        createAndConfigureWebView(context, targetUrl).apply {
+    val focusRequester = remember { FocusRequester() }
+    val ttsHelper = remember { HPCTextToSpeechHelper(context) }
+
+    val webView = remember(targetUrl) {
+        createAndConfigureWebView(context, targetUrl, ttsHelper).apply {
             webChromeClient = object : WebChromeClient() {
                 override fun onPermissionRequest(request: PermissionRequest?) {
                     Log.d(TAG, "Granting WebRTC permissions for origin: ${request?.origin}")
@@ -177,8 +188,30 @@ fun TvWebView(
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
                     isLoading = false
-                    // Ensure focus for TV D-Pad navigation
                     view?.requestFocus()
+
+                    // Inject Offline Web API SpeechSynthesis & HpcNative Polyfill
+                    val ttsPolyfill = """
+                        (function() {
+                            if (window.HpcNative || window.AndroidTTS) {
+                                const bridge = window.HpcNative || window.AndroidTTS;
+                                window.speechSynthesis = window.speechSynthesis || {};
+                                window.speechSynthesis.speak = function(utterance) {
+                                    if (utterance && utterance.text) {
+                                        if (bridge.speakAnnouncement) {
+                                            bridge.speakAnnouncement(utterance.text, utterance.text, 'en');
+                                        } else if (bridge.speak) {
+                                            bridge.speak(utterance.text, utterance.lang || 'en-US');
+                                        }
+                                    }
+                                };
+                                window.speechSynthesis.cancel = function() {
+                                    if (bridge.stop) bridge.stop();
+                                };
+                            }
+                        })();
+                    """.trimIndent()
+                    view?.evaluateJavascript(ttsPolyfill, null)
                 }
 
                 @SuppressLint("WebViewClientOnReceivedSslError")
@@ -199,7 +232,6 @@ fun TvWebView(
                     request: WebResourceRequest?,
                     error: WebResourceError?
                 ) {
-                    // Only show error screen for main frame loading failures
                     if (request?.isForMainFrame == true) {
                         isLoading = false
                         hasError = true
@@ -212,21 +244,41 @@ fun TvWebView(
                     view: WebView?,
                     request: WebResourceRequest?
                 ): Boolean {
-                    // Keep navigation inside WebView for PWA experience
                     return false
                 }
             }
         }
     }
 
-    DisposableEffect(Unit) {
+    // Connection Timeout Safety Timer (8 seconds)
+    LaunchedEffect(isLoading, targetUrl) {
+        if (isLoading) {
+            delay(8000)
+            if (isLoading) {
+                isLoading = false
+                hasError = true
+                errorMessage = "Connection timed out connecting to $targetUrl"
+            }
+        }
+    }
+
+    // Pass D-Pad focus to error button when error screen shows
+    LaunchedEffect(hasError) {
+        if (hasError) {
+            focusRequester.requestFocus()
+        }
+    }
+
+    DisposableEffect(targetUrl) {
         onDispose {
+            CookieManager.getInstance().flush()
+            ttsHelper.shutdown()
             webView.stopLoading()
             webView.destroy()
         }
     }
 
-    // Handle Android TV Back Button for WebView History or Custom View exit
+    // Handle Android TV / Tablet Back Button for WebView History or double-back exit
     BackHandler(enabled = true) {
         if (customView != null) {
             customViewCallback?.onCustomViewHidden()
@@ -263,7 +315,7 @@ fun TvWebView(
             AndroidView(
                 factory = { webView },
                 update = { view ->
-                    if (view.url == null || hasError) {
+                    if (view.url == null) {
                         view.loadUrl(targetUrl)
                     }
                 },
@@ -320,21 +372,21 @@ fun TvWebView(
                         color = Color.Gray
                     )
                     Spacer(modifier = Modifier.height(24.dp))
-                    androidx.compose.foundation.layout.Row {
+                    Row {
                         Button(
                             onClick = {
                                 hasError = false
                                 isLoading = true
                                 webView.loadUrl(targetUrl)
-                            }
+                            },
+                            modifier = Modifier.focusRequester(focusRequester)
                         ) {
                             Text("Retry Connection")
                         }
 
                         if (onRescanRequested != null) {
-                            Spacer(modifier = Modifier.height(0.dp))
-                            androidx.compose.foundation.layout.Spacer(modifier = Modifier.padding(horizontal = 8.dp))
-                            androidx.tv.material3.OutlinedButton(
+                            Spacer(modifier = Modifier.width(16.dp))
+                            OutlinedButton(
                                 onClick = onRescanRequested
                             ) {
                                 Text("Rescan Network")
@@ -348,7 +400,11 @@ fun TvWebView(
 }
 
 @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
-private fun createAndConfigureWebView(context: Context, url: String): WebView {
+private fun createAndConfigureWebView(
+    context: Context,
+    url: String,
+    ttsHelper: HPCTextToSpeechHelper
+): WebView {
     val webViewInstance = WebView(context)
     return webViewInstance.apply {
         layoutParams = ViewGroup.LayoutParams(
@@ -361,13 +417,24 @@ private fun createAndConfigureWebView(context: Context, url: String): WebView {
         isFocusableInTouchMode = true
         keepScreenOn = true
 
+        // Register Native Printing Bridge
+        addJavascriptInterface(HPCPrintHelper(context, webViewInstance), "AndroidPrinter")
+
+        // Register Native Offline Text-To-Speech Engine Bridge (HpcNative & AndroidTTS)
+        addJavascriptInterface(ttsHelper, "HpcNative")
+        addJavascriptInterface(ttsHelper, "AndroidTTS")
+
+        // Register Native File Download Listener (Excel .xlsx, .csv, .db, PDFs)
+        setDownloadListener { downloadUrl, userAgent, contentDisposition, mimetype, _ ->
+            HPCDownloadHelper.handleDownload(context, downloadUrl, userAgent, contentDisposition, mimetype)
+        }
+
         // Forward D-Pad key events cleanly
         setOnKeyListener { _, keyCode, event ->
             if (event.action == KeyEvent.ACTION_DOWN) {
                 when (keyCode) {
                     KeyEvent.KEYCODE_DPAD_CENTER,
                     KeyEvent.KEYCODE_ENTER -> {
-                        // Pass enter/click to focused web element
                         false
                     }
                     else -> false
@@ -391,21 +458,17 @@ private fun createAndConfigureWebView(context: Context, url: String): WebView {
             mediaPlaybackRequiresUserGesture = false
             setSupportMultipleWindows(true)
 
-            // Mixed Content Mode for local network resources
             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
 
             allowFileAccess = true
             allowContentAccess = true
 
-            // Viewport settings for desktop/TV PWA rendering
             useWideViewPort = true
             loadWithOverviewMode = true
             setSupportZoom(false)
 
-            // Cache & Service Worker setup for offline PWA
             cacheMode = WebSettings.LOAD_DEFAULT
 
-            // Modern Desktop Chrome TV User-Agent to prevent mobile fallback layout
             userAgentString = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 HPCNativeTV/1.0"
         }
 

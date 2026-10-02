@@ -162,12 +162,26 @@ object NetworkScanner {
     /**
      * Attempts a socket connection to host:port.
      */
-    private fun isPortOpen(host: String, port: Int, timeoutMs: Int): Boolean {
+    fun isPortOpen(host: String, port: Int, timeoutMs: Int): Boolean {
         return try {
             Socket().use { socket ->
                 socket.connect(InetSocketAddress(host, port), timeoutMs)
                 true
             }
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Checks if a server URL is alive on port 3000.
+     */
+    suspend fun isServerReachable(url: String, timeoutMs: Int = 1000): Boolean = withContext(Dispatchers.IO) {
+        return@withContext try {
+            val uri = java.net.URI(url)
+            val host = uri.host ?: return@withContext false
+            val port = if (uri.port != -1) uri.port else 3000
+            isPortOpen(host, port, timeoutMs)
         } catch (e: Exception) {
             false
         }
