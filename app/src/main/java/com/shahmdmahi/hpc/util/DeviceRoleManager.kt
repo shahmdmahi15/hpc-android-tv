@@ -9,7 +9,7 @@ enum class DeviceRole(val title: String, val path: String) {
     HANDLER("Therapy Floor", "/handler"),
     CASHIER("Cashier Counter", "/cashier"),
     ADMIN("Admin Desk", "/admin"),
-    DEFAULT("Default / Multi-user", "/login")
+    DEFAULT("Waiting Room TV Queue", "/")
 }
 
 object DeviceRoleManager {
@@ -18,11 +18,16 @@ object DeviceRoleManager {
 
     fun getSavedRole(context: Context): DeviceRole {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val roleName = prefs.getString(KEY_DEVICE_ROLE, DeviceRole.DEFAULT.name)
+        val roleName = prefs.getString(KEY_DEVICE_ROLE, DeviceRole.WAITING_ROOM_TV.name)
         return try {
-            DeviceRole.valueOf(roleName ?: DeviceRole.DEFAULT.name)
+            val role = DeviceRole.valueOf(roleName ?: DeviceRole.WAITING_ROOM_TV.name)
+            if (role.name == "DEFAULT" || role.path == "/login") {
+                DeviceRole.WAITING_ROOM_TV
+            } else {
+                role
+            }
         } catch (e: Exception) {
-            DeviceRole.DEFAULT
+            DeviceRole.WAITING_ROOM_TV
         }
     }
 

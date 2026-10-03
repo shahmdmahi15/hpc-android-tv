@@ -118,6 +118,9 @@ class MainActivity : ComponentActivity() {
                             onRescanRequested = {
                                 NetworkScanner.clearSavedServerUrl(this@MainActivity)
                                 activeServerUrl = null
+                            },
+                            onManualIpChanged = { newUrl ->
+                                activeServerUrl = newUrl
                             }
                         )
                     }

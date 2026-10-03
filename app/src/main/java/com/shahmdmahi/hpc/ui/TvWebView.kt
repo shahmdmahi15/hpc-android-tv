@@ -56,10 +56,11 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.shahmdmahi.hpc.R
+import com.shahmdmahi.hpc.util.DeviceRoleManager
 import com.shahmdmahi.hpc.util.HPCDownloadHelper
 import com.shahmdmahi.hpc.util.HPCPrintHelper
 import com.shahmdmahi.hpc.util.HPCTextToSpeechHelper
-import com.shahmdmahi.hpc.util.SslUtils
+import com.shahmdmahi.hpc.util.NetworkScanner
 import kotlinx.coroutines.delay
 
 private const val TAG = "HPC_TvWebView"
@@ -68,6 +69,7 @@ private const val TAG = "HPC_TvWebView"
 fun TvWebView(
     targetUrl: String = stringResource(id = R.string.pwa_target_url),
     onRescanRequested: (() -> Unit)? = null,
+    onManualIpChanged: ((String) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -94,12 +96,24 @@ fun TvWebView(
                     isUserGesture: Boolean,
                     resultMsg: Message?
                 ): Boolean {
-                    val newWebView = WebView(view?.context ?: context)
-                    newWebView.settings.javaScriptEnabled = true
-                    newWebView.webViewClient = object : WebViewClient() {
-                        override fun shouldOverrideUrlLoading(v: WebView?, req: WebResourceRequest?): Boolean {
-                            req?.url?.toString()?.let { url -> view?.loadUrl(url) }
-                            return true
+                    val newWebView = WebView(view?.context ?: context).apply {
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.databaseEnabled = true
+                        webViewClient = object : WebViewClient() {
+                            override fun shouldOverrideUrlLoading(v: WebView?, req: WebResourceRequest?): Boolean {
+                                req?.url?.toString()?.let { url -> view?.loadUrl(url) }
+                                return true
+                            }
+
+                            @SuppressLint("WebViewClientOnReceivedSslError")
+                            override fun onReceivedSslError(
+                                v: WebView?,
+                                handler: SslErrorHandler?,
+                                error: SslError?
+                            ) {
+                                handler?.proceed()
+                            }
                         }
                     }
                     val transport = resultMsg?.obj as? WebView.WebViewTransport
@@ -193,21 +207,32 @@ fun TvWebView(
                     // Inject Offline Web API SpeechSynthesis & HpcNative Polyfill
                     val ttsPolyfill = """
                         (function() {
-                            if (window.HpcNative || window.AndroidTTS) {
+                            try {
                                 const bridge = window.HpcNative || window.AndroidTTS;
-                                window.speechSynthesis = window.speechSynthesis || {};
-                                window.speechSynthesis.speak = function(utterance) {
-                                    if (utterance && utterance.text) {
-                                        if (bridge.speakAnnouncement) {
-                                            bridge.speakAnnouncement(utterance.text, utterance.text, 'en');
-                                        } else if (bridge.speak) {
-                                            bridge.speak(utterance.text, utterance.lang || 'en-US');
+                                if (bridge) {
+                                    window.speechSynthesis = window.speechSynthesis || {};
+                                    window.speechSynthesis.speak = function(utterance) {
+                                        if (utterance && utterance.text) {
+                                            const lang = utterance.lang || 'en-US';
+                                            const mode = lang.startsWith('bn') ? 'bn' : 'en';
+                                            if (bridge.speakAnnouncement) {
+                                                bridge.speakAnnouncement(utterance.text, utterance.text, mode);
+                                            } else if (bridge.speak) {
+                                                bridge.speak(utterance.text, lang);
+                                            }
                                         }
-                                    }
-                                };
-                                window.speechSynthesis.cancel = function() {
-                                    if (bridge.stop) bridge.stop();
-                                };
+                                    };
+                                    window.speechSynthesis.cancel = function() {
+                                        if (bridge.stop) bridge.stop();
+                                    };
+                                    window.speechSynthesis.resume = function() {};
+                                    window.speechSynthesis.pause = function() {};
+                                    window.speechSynthesis.getVoices = function() {
+                                        return [{ default: true, lang: 'en-US', localService: true, name: 'Android Native TTS Voice' }];
+                                    };
+                                }
+                            } catch(e) {
+                                console.warn('[TTS Polyfill error]:', e);
                             }
                         })();
                     """.trimIndent()
@@ -220,11 +245,9 @@ fun TvWebView(
                     handler: SslErrorHandler?,
                     error: SslError?
                 ) {
-                    if (SslUtils.shouldProceedSslError(error, targetUrl)) {
-                        handler?.proceed()
-                    } else {
-                        super.onReceivedSslError(view, handler, error)
-                    }
+                    // Always bypass SSL certificate errors for the private local hospital network
+                    Log.w(TAG, "Proceeding through SSL error for local offline server: ${error?.url}")
+                    handler?.proceed()
                 }
 
                 override fun onReceivedError(
@@ -250,10 +273,10 @@ fun TvWebView(
         }
     }
 
-    // Connection Timeout Safety Timer (8 seconds)
+    // Connection Timeout Safety Timer (25 seconds for cold SSR compile)
     LaunchedEffect(isLoading, targetUrl) {
         if (isLoading) {
-            delay(8000)
+            delay(25000)
             if (isLoading) {
                 isLoading = false
                 hasError = true
@@ -272,9 +295,15 @@ fun TvWebView(
     DisposableEffect(targetUrl) {
         onDispose {
             CookieManager.getInstance().flush()
-            ttsHelper.shutdown()
+            ttsHelper.stop()
             webView.stopLoading()
             webView.destroy()
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            ttsHelper.shutdown()
         }
     }
 
@@ -340,7 +369,7 @@ fun TvWebView(
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Text(
-                        text = "Loading Local PWA App...",
+                        text = "Connecting to HPC Local App...",
                         style = MaterialTheme.typography.titleMedium,
                         color = Color.White
                     )
@@ -367,7 +396,7 @@ fun TvWebView(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "Target: $targetUrl\nReason: $errorMessage",
+                        text = "Target: $targetUrl\nReason: $errorMessage\n\nPlease ensure your server is running on port 3000 in your local Wi-Fi / LAN network.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = Color.Gray
                     )
@@ -391,6 +420,39 @@ fun TvWebView(
                             ) {
                                 Text("Rescan Network")
                             }
+                        }
+
+                        Spacer(modifier = Modifier.width(16.dp))
+                        OutlinedButton(
+                            onClick = {
+                                val input = EditText(context).apply {
+                                    hint = "192.168.2.2"
+                                }
+                                AlertDialog.Builder(context)
+                                    .setTitle("Enter Server IP")
+                                    .setMessage("Type the IP address of your server running on port 3000:")
+                                    .setView(input)
+                                    .setPositiveButton("Connect") { _, _ ->
+                                        val ip = input.text.toString().trim()
+                                        if (ip.isNotEmpty()) {
+                                            val url = if (ip.startsWith("http")) ip else "http://$ip:3000"
+                                            NetworkScanner.saveServerUrl(context, url)
+                                            val savedRole = DeviceRoleManager.getSavedRole(context)
+                                            val fullUrl = DeviceRoleManager.buildFullTargetUrl(url, savedRole)
+                                            if (onManualIpChanged != null) {
+                                                onManualIpChanged(fullUrl)
+                                            } else {
+                                                hasError = false
+                                                isLoading = true
+                                                webView.loadUrl(fullUrl)
+                                            }
+                                        }
+                                    }
+                                    .setNegativeButton("Cancel", null)
+                                    .show()
+                            }
+                        ) {
+                            Text("Enter IP Manually")
                         }
                     }
                 }

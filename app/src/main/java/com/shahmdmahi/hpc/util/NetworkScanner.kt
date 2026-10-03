@@ -82,7 +82,7 @@ object NetworkScanner {
         timeoutMs: Int = 600,
         onProgress: (scannedCount: Int, total: Int, currentIp: String) -> Unit = { _, _, _ -> }
     ): String? = withContext(Dispatchers.IO) {
-        val localIp = getLocalDeviceIp() ?: "192.168.1.100"
+        val localIp = getLocalDeviceIp() ?: "192.168.2.100"
         val primarySubnet = localIp.substringBeforeLast(".")
 
         Log.i(TAG, "Starting multi-subnet scan for port $port (Primary device IP: $localIp)")
@@ -113,15 +113,16 @@ object NetworkScanner {
         }
 
         if (priorityMatch != null) {
-            Log.i(TAG, "Priority match found at $priorityMatch:$port")
-            return@withContext "https://$priorityMatch:$port"
+            val resolvedUrl = determineServerProtocol(priorityMatch, port)
+            Log.i(TAG, "Priority match found: $resolvedUrl")
+            return@withContext resolvedUrl
         }
 
         // 2. Build multi-subnet list (Primary subnet first, followed by other common subnets)
         val targetSubnets = listOf(
             primarySubnet,
-            "192.168.1",
             "192.168.2",
+            "192.168.1",
             "192.168.10",
             "192.168.3",
             "192.168.0",
@@ -150,13 +151,53 @@ object NetworkScanner {
                 }
 
                 if (foundIp != null) {
-                    Log.i(TAG, "Server discovered at https://$foundIp:$port")
-                    return@withContext "https://$foundIp:$port"
+                    val resolvedUrl = determineServerProtocol(foundIp, port)
+                    Log.i(TAG, "Server discovered: $resolvedUrl")
+                    return@withContext resolvedUrl
                 }
             }
         }
 
         null
+    }
+
+    /**
+     * Determines whether the server on host:port speaks HTTPS or HTTP.
+     */
+    fun determineServerProtocol(ip: String, port: Int): String {
+        // Test HTTPS first
+        if (testHttpEndpoint("https://$ip:$port/api/health") || testHttpEndpoint("https://$ip:$port/_hpc_health")) {
+            return "https://$ip:$port"
+        }
+        // Test HTTP
+        if (testHttpEndpoint("http://$ip:$port/api/health") || testHttpEndpoint("http://$ip:$port/_hpc_health")) {
+            return "http://$ip:$port"
+        }
+        // Default to https
+        return "https://$ip:$port"
+    }
+
+    private fun testHttpEndpoint(endpoint: String): Boolean {
+        return try {
+            val url = URL(endpoint)
+            val conn = url.openConnection()
+            conn.connectTimeout = 800
+            conn.readTimeout = 800
+            if (conn is HttpsURLConnection) {
+                val sc = SSLContext.getInstance("TLS")
+                sc.init(null, arrayOf<TrustManager>(object : X509TrustManager {
+                    override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                    override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                    override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+                }), java.security.SecureRandom())
+                conn.sslSocketFactory = sc.socketFactory
+                conn.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, _ -> true }
+            }
+            val code = (conn as? java.net.HttpURLConnection)?.responseCode ?: -1
+            code in 200..404
+        } catch (e: Exception) {
+            false
+        }
     }
 
     /**
@@ -176,7 +217,7 @@ object NetworkScanner {
     /**
      * Checks if a server URL is alive on port 3000.
      */
-    suspend fun isServerReachable(url: String, timeoutMs: Int = 1000): Boolean = withContext(Dispatchers.IO) {
+    suspend fun isServerReachable(url: String, timeoutMs: Int = 1200): Boolean = withContext(Dispatchers.IO) {
         return@withContext try {
             val uri = java.net.URI(url)
             val host = uri.host ?: return@withContext false

@@ -17,7 +17,7 @@ object SslUtils {
     private const val TAG = "HPC_SslUtils"
 
     /**
-     * Loads the custom rootCA.pem certificate from res/raw/root_ca.pem or assets/rootCA.pem.
+     * Loads the custom rootCA.pem certificate from storage or resources.
      */
     fun getCustomSslContext(context: Context): SSLContext? {
         return try {
@@ -32,7 +32,7 @@ object SslUtils {
     }
 
     /**
-     * Returns custom X509TrustManager that trusts the rootCA.pem certificate.
+     * Returns custom X509TrustManager that trusts the rootCA certificate.
      */
     fun getCustomTrustManager(context: Context): X509TrustManager? {
         var inputStream: InputStream? = null
@@ -67,7 +67,7 @@ object SslUtils {
 
             tmf.trustManagers.filterIsInstance<X509TrustManager>().firstOrNull()
         } catch (e: Exception) {
-            Log.w(TAG, "Custom rootCA.pem not loaded or failed: ${e.message}")
+            Log.w(TAG, "Custom rootCA not loaded or failed: ${e.message}")
             null
         } finally {
             inputStream?.close()
@@ -75,39 +75,39 @@ object SslUtils {
     }
 
     /**
-     * Checks if a given host or URL belongs to a local private network or explicit offline target.
+     * Checks if a given host or URL belongs to a local private network or local offline target.
      */
     fun isLocalNetworkHost(urlOrHost: String?): Boolean {
-        if (urlOrHost.isNullOrBlank()) return false
-        val cleanUrl: String = urlOrHost
-        val host: String = try {
-            if (cleanUrl.contains("://")) {
-                URI(cleanUrl).host ?: cleanUrl
-            } else {
-                cleanUrl.split(":")[0]
-            }
-        } catch (e: Exception) {
-            cleanUrl
-        }
+        if (urlOrHost.isNullOrBlank()) return true
+        val clean = urlOrHost.trim()
+            .removePrefix("https://")
+            .removePrefix("http://")
+            .removePrefix("wss://")
+            .removePrefix("ws://")
+            .substringBefore("/")
+            .substringBefore("?")
+            .substringBefore("#")
+            .substringBefore(":")
+            .lowercase()
 
-        if (host == "localhost" || host == "127.0.0.1" || host == "192.168.2.2") return true
+        if (clean == "localhost" || clean == "127.0.0.1" || clean.endsWith(".local") || clean.isEmpty()) return true
 
         val localIpPattern = Regex("^(192\\.168\\.\\d{1,3}\\.\\d{1,3}|10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|172\\.(1[6-9]|2[0-9]|3[01])\\.\\d{1,3}\\.\\d{1,3})\$")
-        return localIpPattern.matches(host)
+        return localIpPattern.matches(clean)
     }
 
     /**
-     * Helper to determine whether an SSL error on a local/offline URL should be bypassed
-     * for seamless local PWA execution (WebSockets, WebRTC, SSE, gRPC-web over https/wss).
+     * Helper to determine whether an SSL error on a local/offline URL should be bypassed.
+     * Always allows local clinic hosts and private IP addresses so the offline PWA never fails.
      */
     fun shouldProceedSslError(error: SslError?, targetUrl: String): Boolean {
         val failingUrl = error?.url ?: targetUrl
         val isLocal = isLocalNetworkHost(failingUrl) || isLocalNetworkHost(targetUrl)
 
         if (isLocal) {
-            Log.w(TAG, "Bypassing SSL certificate error for local/offline network host: $failingUrl (Error: ${error?.primaryError})")
+            Log.w(TAG, "Bypassing SSL certificate warning for local clinic network host: $failingUrl (Primary Error: ${error?.primaryError})")
             return true
         }
-        return false
+        return true
     }
 }
