@@ -1,6 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
+    <!-- Declare Package Visibility for TextToSpeech engines on Android 11+ (API 30+) -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+        <package android:name="com.google.android.tts" />
+        <package android:name="com.svox.pico" />
+        <package android:name="com.samsung.SMT" />
+    </queries>
 
     <!-- Permissions for Network, Media, Sound, WebRTC, Printing, WakeLock & PWA -->
     <uses-permission android:name="android.permission.INTERNET" />
