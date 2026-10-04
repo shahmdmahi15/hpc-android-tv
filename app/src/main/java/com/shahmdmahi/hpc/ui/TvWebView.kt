@@ -193,49 +193,67 @@ fun TvWebView(
             }
 
             webViewClient = object : WebViewClient() {
+                private val ttsPolyfill = """
+                    (function() {
+                        try {
+                            const bridge = window.HpcNative || window.AndroidTTS;
+                            window.speechSynthesis = window.speechSynthesis || {};
+                            if (typeof window.speechSynthesis.addEventListener !== 'function') {
+                                window.speechSynthesis.addEventListener = function(event, callback) {
+                                    if (event === 'voiceschanged' && typeof callback === 'function') {
+                                        try { callback(); } catch(e) {}
+                                    }
+                                };
+                            }
+                            if (typeof window.speechSynthesis.removeEventListener !== 'function') {
+                                window.speechSynthesis.removeEventListener = function() {};
+                            }
+                            if (typeof window.speechSynthesis.getVoices !== 'function') {
+                                window.speechSynthesis.getVoices = function() {
+                                    return [{ default: true, lang: 'en-US', localService: true, name: 'Android Native TTS Voice' }];
+                                };
+                            }
+                            if (typeof window.speechSynthesis.cancel !== 'function') {
+                                window.speechSynthesis.cancel = function() {
+                                    if (bridge && typeof bridge.stop === 'function') bridge.stop();
+                                };
+                            }
+                            if (typeof window.speechSynthesis.resume !== 'function') {
+                                window.speechSynthesis.resume = function() {};
+                            }
+                            if (typeof window.speechSynthesis.pause !== 'function') {
+                                window.speechSynthesis.pause = function() {};
+                            }
+                            if (bridge) {
+                                window.speechSynthesis.speak = function(utterance) {
+                                    if (utterance && utterance.text) {
+                                        const lang = utterance.lang || 'en-US';
+                                        const mode = lang.startsWith('bn') ? 'bn' : 'en';
+                                        if (typeof bridge.speakAnnouncement === 'function') {
+                                            bridge.speakAnnouncement(utterance.text, utterance.text, mode);
+                                        } else if (typeof bridge.speak === 'function') {
+                                            bridge.speak(utterance.text, lang);
+                                        }
+                                    }
+                                };
+                            }
+                        } catch(e) {
+                            console.warn('[TTS Polyfill error]:', e);
+                        }
+                    })();
+                """.trimIndent()
+
                 override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                     super.onPageStarted(view, url, favicon)
                     isLoading = true
                     hasError = false
+                    view?.evaluateJavascript(ttsPolyfill, null)
                 }
 
                 override fun onPageFinished(view: WebView?, url: String?) {
                     super.onPageFinished(view, url)
                     isLoading = false
                     view?.requestFocus()
-
-                    // Inject Offline Web API SpeechSynthesis & HpcNative Polyfill
-                    val ttsPolyfill = """
-                        (function() {
-                            try {
-                                const bridge = window.HpcNative || window.AndroidTTS;
-                                if (bridge) {
-                                    window.speechSynthesis = window.speechSynthesis || {};
-                                    window.speechSynthesis.speak = function(utterance) {
-                                        if (utterance && utterance.text) {
-                                            const lang = utterance.lang || 'en-US';
-                                            const mode = lang.startsWith('bn') ? 'bn' : 'en';
-                                            if (bridge.speakAnnouncement) {
-                                                bridge.speakAnnouncement(utterance.text, utterance.text, mode);
-                                            } else if (bridge.speak) {
-                                                bridge.speak(utterance.text, lang);
-                                            }
-                                        }
-                                    };
-                                    window.speechSynthesis.cancel = function() {
-                                        if (bridge.stop) bridge.stop();
-                                    };
-                                    window.speechSynthesis.resume = function() {};
-                                    window.speechSynthesis.pause = function() {};
-                                    window.speechSynthesis.getVoices = function() {
-                                        return [{ default: true, lang: 'en-US', localService: true, name: 'Android Native TTS Voice' }];
-                                    };
-                                }
-                            } catch(e) {
-                                console.warn('[TTS Polyfill error]:', e);
-                            }
-                        })();
-                    """.trimIndent()
                     view?.evaluateJavascript(ttsPolyfill, null)
                 }
 
