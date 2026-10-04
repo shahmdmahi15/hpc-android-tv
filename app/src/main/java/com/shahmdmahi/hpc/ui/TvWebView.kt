@@ -229,11 +229,19 @@ fun TvWebView(
                                     if (utterance && utterance.text) {
                                         const lang = utterance.lang || 'en-US';
                                         const mode = lang.startsWith('bn') ? 'bn' : 'en';
+                                        try {
+                                            if (typeof utterance.onstart === 'function') utterance.onstart();
+                                        } catch(e) {}
                                         if (typeof bridge.speakAnnouncement === 'function') {
                                             bridge.speakAnnouncement(utterance.text, utterance.text, mode);
                                         } else if (typeof bridge.speak === 'function') {
                                             bridge.speak(utterance.text, lang);
                                         }
+                                        setTimeout(function() {
+                                            try {
+                                                if (typeof utterance.onend === 'function') utterance.onend();
+                                            } catch(e) {}
+                                        }, 4000);
                                     }
                                 };
                             }

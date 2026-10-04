@@ -61,11 +61,22 @@ class HPCOfflineAudioAnnouncer(private val context: Context) {
         mode: String? = "bilingual",
         includeChime: Boolean = false
     ): Boolean {
+        return announceDoctorCall(token, null, room, mode, includeChime)
+    }
+
+    fun announceDoctorCall(
+        token: String?,
+        patient: String?,
+        room: String?,
+        mode: String? = "bilingual",
+        includeChime: Boolean = false
+    ): Boolean {
         val cleanToken = token?.trim()?.replace(Regex("[^0-9]"), "") ?: ""
         val cleanRoom = room?.trim() ?: ""
+        val cleanPatient = patient?.trim() ?: ""
         val announcementMode = mode?.lowercase() ?: "bilingual"
 
-        Log.i(TAG, "Announcing Doctor Call - Token: '$cleanToken', Room: '$cleanRoom', Mode: '$announcementMode', Chime: $includeChime")
+        Log.i(TAG, "Announcing Doctor Call - Token: '$cleanToken', Patient: '$cleanPatient', Room: '$cleanRoom', Mode: '$announcementMode', Chime: $includeChime")
 
         val playlist = mutableListOf<String>()
 
@@ -83,6 +94,10 @@ class HPCOfflineAudioAnnouncer(private val context: Context) {
                 addEnglishNumberClips(playlist, cleanToken)
             }
 
+            if (cleanPatient.isNotEmpty() && availableAssets.contains("en_patient.mp3")) {
+                playlist.add("en_patient.mp3")
+            }
+
             if (cleanRoom.isNotEmpty()) {
                 playlist.add("en_please_proceed_to_room.mp3")
                 addEnglishRoomClips(playlist, cleanRoom)
@@ -96,6 +111,10 @@ class HPCOfflineAudioAnnouncer(private val context: Context) {
             if (cleanToken.isNotEmpty()) {
                 playlist.add("bn_token.mp3")
                 addBengaliNumberClips(playlist, cleanToken)
+            }
+
+            if (cleanPatient.isNotEmpty() && availableAssets.contains("bn_rogi.mp3")) {
+                playlist.add("bn_rogi.mp3")
             }
 
             if (cleanRoom.isNotEmpty()) {
